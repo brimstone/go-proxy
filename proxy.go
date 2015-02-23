@@ -16,9 +16,7 @@ type Proxy struct {
 }
 
 func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request) {
-	fmt.Printf("%s %s\n", r.Method, r.URL)
-	req, err := http.NewRequest(r.Method, p.url.Scheme+"://"+p.url.Host+r.URL.Path, nil)
-	fmt.Printf("r: %#v\n\n", req)
+	req, err := http.NewRequest(r.Method, p.url.Scheme+"://"+p.url.Host+r.URL.String(), nil)
 	resp, err := p.httpClient.Do(req)
 	if err != nil {
 		fmt.Printf("ERROR Do: %s\n", err.Error())
