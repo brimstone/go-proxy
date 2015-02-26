@@ -35,10 +35,14 @@ func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request) {
 
 	// If this is chunked, handle it that way
 	buf := make([]byte, 65535)
+	size := 0
 	for {
-		_, err = resp.Body.Read(buf)
-		w.Write(buf)
+		size, err = resp.Body.Read(buf)
+		w.Write(buf[0:size])
 		w.(http.Flusher).Flush()
+		if size < len(buf) {
+			break
+		}
 	}
 }
 
