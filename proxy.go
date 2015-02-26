@@ -3,7 +3,7 @@ package proxy
 import (
 	"crypto/tls"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -23,14 +23,23 @@ func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// [todo] - handle w.WriteHeader()
+	w.Header().Set("Content-Type", resp.Header["Content-Type"][0])
+
 	defer resp.Body.Close()
-	data, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		fmt.Printf("ERROR ReadAll: %s\n", err.Error())
+
+	// If this is totally normal content
+	if resp.ContentLength != -1 {
+		io.Copy(w, resp.Body)
 		return
 	}
-	w.Write(data)
+
+	// If this is chunked, handle it that way
+	buf := make([]byte, 65535)
+	for {
+		_, err = resp.Body.Read(buf)
+		w.Write(buf)
+		w.(http.Flusher).Flush()
+	}
 }
 
 func newHTTPClient(u *url.URL, tlsConfig *tls.Config, timeout time.Duration) *http.Client {
