@@ -23,6 +23,9 @@ func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if len(resp.Header["Content-Type"]) == 0 {
+		return
+	}
 	w.Header().Set("Content-Type", resp.Header["Content-Type"][0])
 
 	defer resp.Body.Close()
