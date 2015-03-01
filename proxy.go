@@ -41,6 +41,9 @@ func (p *Proxy) ListenAndServe(l string) {
 func (p *Proxy) handleConnection(c net.Conn) {
 	defer c.Close()
 
+	var outbound net.Conn
+	var err error
+
 	header, err := readUntil(c, "\n")
 	if err != nil {
 		fmt.Println("Error reading first line from connection:", err.Error())
@@ -52,16 +55,21 @@ func (p *Proxy) handleConnection(c net.Conn) {
 	for h := 0; h < len(p.handlers); h++ {
 		if p.handlers[h].path.MatchString(requestArray[1]) {
 			if p.handlers[h].dst.Scheme == "http" {
-				outbound, err := net.Dial("tcp", p.handlers[h].dst.Host)
-				if err != nil {
-					fmt.Println("Error opening connection to", p.handlers[h].dst, err.Error())
-					return
-				}
-				fmt.Fprintf(outbound, "%s", string(header))
-				fmt.Fprintf(outbound, "Connection: Close\n")
-				go io.Copy(outbound, c)
-				io.Copy(c, outbound)
+				outbound, err = net.Dial("tcp", p.handlers[h].dst.Host)
+			} else if p.handlers[h].dst.Scheme == "unix" {
+				outbound, err = net.Dial("unix", p.handlers[h].dst.Path)
+			} else {
+				fmt.Println("go-proxy can't handle", p.handlers[h].dst.Scheme)
+				return
 			}
+			if err != nil {
+				fmt.Println("Error opening connection to", p.handlers[h].dst, err.Error())
+				return
+			}
+			fmt.Fprintf(outbound, "%s", string(header))
+			fmt.Fprintf(outbound, "Connection: Close\n")
+			go io.Copy(outbound, c)
+			io.Copy(c, outbound)
 			return
 		}
 	}
