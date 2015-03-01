@@ -1,87 +1,104 @@
 package proxy
 
 import (
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
-	"time"
+	"regexp"
+	"strings"
 )
 
+type handler struct {
+	path *regexp.Regexp
+	dst  *url.URL
+}
 type Proxy struct {
-	url        *url.URL
-	httpClient *http.Client
+	listen   string
+	listener net.Listener
+	handlers []handler
 }
 
-func (p *Proxy) Handle(w http.ResponseWriter, r *http.Request) {
-	req, err := http.NewRequest(r.Method, p.url.Scheme+"://"+p.url.Host+r.URL.String(), nil)
-	resp, err := p.httpClient.Do(req)
+func (p *Proxy) ListenAndServe(l string) {
+	// start listening on our interface and port
+	var err error
+	p.listener, err = net.Listen("tcp", l)
 	if err != nil {
-		fmt.Printf("ERROR Do: %s\n", err.Error())
+		fmt.Println(err.Error())
 		return
 	}
 
-	if len(resp.Header["Content-Type"]) == 0 {
-		return
-	}
-	w.Header().Set("Content-Type", resp.Header["Content-Type"][0])
-
-	defer resp.Body.Close()
-
-	// If this is totally normal content
-	if resp.ContentLength != -1 {
-		io.Copy(w, resp.Body)
-		return
-	}
-
-	// If this is chunked, handle it that way
-	buf := make([]byte, 65535)
-	size := 0
 	for {
-		size, err = resp.Body.Read(buf)
-		w.Write(buf[0:size])
-		w.(http.Flusher).Flush()
-		if size < len(buf) {
-			break
+		conn, err := p.listener.Accept()
+		if err != nil {
+			fmt.Println(err.Error())
+			return
 		}
+		go p.handleConnection(conn)
 	}
 }
 
-func newHTTPClient(u *url.URL, tlsConfig *tls.Config, timeout time.Duration) *http.Client {
-	httpTransport := &http.Transport{
-		TLSClientConfig: tlsConfig,
+func (p *Proxy) handleConnection(c net.Conn) {
+	defer c.Close()
+
+	header, err := readUntil(c, "\n")
+	if err != nil {
+		fmt.Println("Error reading first line from connection:", err.Error())
+		return
 	}
 
-	switch u.Scheme {
-	default:
-		httpTransport.Dial = func(proto, addr string) (net.Conn, error) {
-			return net.DialTimeout(proto, addr, timeout)
+	// parse out method, path, and protocol
+	requestArray := strings.Split(string(header), " ")
+	for h := 0; h < len(p.handlers); h++ {
+		if p.handlers[h].path.MatchString(requestArray[1]) {
+			if p.handlers[h].dst.Scheme == "http" {
+				outbound, err := net.Dial("tcp", p.handlers[h].dst.Host)
+				if err != nil {
+					fmt.Println("Error opening connection to", p.handlers[h].dst, err.Error())
+					return
+				}
+				fmt.Fprintf(outbound, "%s", string(header))
+				fmt.Fprintf(outbound, "Connection: Close\n")
+				go io.Copy(outbound, c)
+				io.Copy(c, outbound)
+			}
+			return
 		}
-	case "unix":
-		socketPath := u.Path
-		unixDial := func(proto, addr string) (net.Conn, error) {
-			return net.DialTimeout("unix", socketPath, timeout)
-		}
-		httpTransport.Dial = unixDial
-		// Override the main URL object so the HTTP lib won't complain
-		u.Scheme = "http"
-		u.Host = "unix.sock"
-		u.Path = ""
 	}
-	return &http.Client{Transport: httpTransport}
+
+	return
 }
 
-func New(u string) (*Proxy, error) {
+func readUntil(r net.Conn, delimiter string) (string, error) {
+	var output []byte
+	for {
+		buffer := make([]byte, 1)
+		_, err := r.Read(buffer)
+		if err != nil {
+			fmt.Println("Error while copying from socket", err.Error())
+			return "", err
+		}
+		output = append(output, buffer[0])
+		if string(buffer) == delimiter {
+			return string(output), nil
+		}
+	}
+
+}
+
+func (p *Proxy) Handle(path string, d string) error {
+	// [todo] - push this onto p.handlers
+	uri, err := url.Parse(d)
+	if err == nil {
+		newHandler := handler{path: regexp.MustCompile(path), dst: uri}
+		p.handlers = append(p.handlers, newHandler)
+	}
+	return err
+}
+
+func New() (*Proxy, error) {
 
 	proxyClient := new(Proxy)
-
-	// [todo] - add error handling here
-	uri, _ := url.Parse(u)
-
-	proxyClient.httpClient = newHTTPClient(uri, nil, time.Second)
-	proxyClient.url = uri
 
 	return proxyClient, nil
 }

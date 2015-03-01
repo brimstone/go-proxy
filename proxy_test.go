@@ -8,7 +8,7 @@ import (
 )
 
 func TestNew(t *testing.T) {
-	proxy, err := New("unix:///var/run/docker.sock")
+	proxy, err := New()
 	if err != nil {
 		t.Errorf("New() ERROR Creating proxy object %q", err.Error())
 	}
@@ -16,6 +16,8 @@ func TestNew(t *testing.T) {
 	if proxy == nil {
 		t.Errorf("New() ERROR proxy object not defined.")
 	}
+
+	proxy.Handle("/", "unix:///var/run/docker.sock")
 }
 
 // Back server
@@ -25,15 +27,11 @@ func (self backServe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "ok")
 }
 
-// Front server
-type frontServe struct{}
+// except server
+type exceptServe struct{}
 
-func (self frontServe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	proxy, err := New("http://localhost:9000")
-	if err != nil {
-		fmt.Fprintf(w, err.Error())
-	}
-	proxy.Handle(w, r)
+func (self exceptServe) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "proxy")
 }
 
 func TestRequst(t *testing.T) {
@@ -42,17 +40,57 @@ func TestRequst(t *testing.T) {
 	back := &http.Server{Addr: "127.0.0.1:9000", Handler: new(backServe)}
 	go back.ListenAndServe()
 
-	front := &http.Server{Addr: "127.0.0.1:9001", Handler: new(frontServe)}
-	go front.ListenAndServe()
+	except := &http.Server{Addr: "127.0.0.1:9001", Handler: new(exceptServe)}
+	go except.ListenAndServe()
 
-	result, err := http.Get("http://127.0.0.1:9001/")
+	proxy, err := New()
 	if err != nil {
 		t.Errorf("Get(): %q", err.Error())
+		return
+	}
+
+	fmt.Println("Adding route for /proxy to :9001")
+	err = proxy.Handle("^/proxy", "http://localhost:9001")
+	if err != nil {
+		t.Errorf("Get(): %q", err.Error())
+		return
+	}
+
+	fmt.Println("Adding route for / to :9000")
+	err = proxy.Handle("^/$", "http://localhost:9000")
+	if err != nil {
+		t.Errorf("Get(): %q", err.Error())
+		return
+	}
+
+	fmt.Println("Starting proxy at :9002")
+	go proxy.ListenAndServe(":9002")
+
+	fmt.Println("Requesting http://127.0.0.1:9002/")
+	result, err := http.Get("http://127.0.0.1:9002/")
+	if err != nil {
+		t.Errorf("Get(): %q", err.Error())
+		return
 	}
 	defer result.Body.Close()
+	fmt.Println("Reading all of body")
 	data, err := ioutil.ReadAll(result.Body)
 	if string(data) != "ok" {
-		t.Errorf("Result not \"ok\"")
+		t.Errorf("Result not \"ok\"", string(data))
+		return
+	}
+
+	fmt.Println("Requesting http://127.0.0.1:9002/proxy")
+	result, err = http.Get("http://127.0.0.1:9002/proxy")
+	if err != nil {
+		t.Errorf("Get(): %q", err.Error())
+		return
+	}
+	defer result.Body.Close()
+	data, err = ioutil.ReadAll(result.Body)
+	if string(data) != "proxy" {
+		t.Errorf("Result not \"proxy\"", string(data))
+		return
 	}
 
 }
