@@ -12,6 +12,7 @@ import (
 type handler struct {
 	path *regexp.Regexp
 	dst  *url.URL
+	close bool
 }
 type Proxy struct {
 	listen   string
@@ -67,7 +68,9 @@ func (p *Proxy) handleConnection(c net.Conn) {
 				return
 			}
 			fmt.Fprintf(outbound, "%s", string(header))
-			fmt.Fprintf(outbound, "Connection: Close\n")
+			if p.handlers[h].close {
+				fmt.Fprintf(outbound, "Connection: Close\n")
+			}
 			go io.Copy(outbound, c)
 			io.Copy(c, outbound)
 			return
@@ -94,11 +97,11 @@ func readUntil(r net.Conn, delimiter string) (string, error) {
 
 }
 
-func (p *Proxy) Handle(path string, d string) error {
+func (p *Proxy) Handle(path string, d string, c bool) error {
 	// [todo] - push this onto p.handlers
 	uri, err := url.Parse(d)
 	if err == nil {
-		newHandler := handler{path: regexp.MustCompile(path), dst: uri}
+		newHandler := handler{path: regexp.MustCompile(path), dst: uri, close: c}
 		p.handlers = append(p.handlers, newHandler)
 	}
 	return err
